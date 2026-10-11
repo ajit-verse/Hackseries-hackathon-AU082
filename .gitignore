@@ -1,0 +1,18 @@
+# Python virtual environments & caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local environment overrides (default fallback key is already built into backend/main.py)
+.env
+
+# Node modules (if any)
+node_modules/
+dist/
+
+# OS files
+.DS_Store
+Thumbs.db
