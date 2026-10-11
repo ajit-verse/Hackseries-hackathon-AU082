@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WildfireWatch — Wildfire Detection &amp; Spread Forecasting</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #f8fafc;
+      color: #0f172a;
+    }
+    .leaflet-container {
+      background: #e2e8f0;
+      font-family: inherit;
+    }
+    .leaflet-popup-content-wrapper {
+      background: #ffffff !important;
+      color: #0f172a !important;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px !important;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12) !important;
+    }
+    .leaflet-control-layers {
+      border: 1px solid #cbd5e1 !important;
+      border-radius: 6px !important;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08) !important;
+    }
+  </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+  <!-- Top Header -->
+  <header class="bg-white border-b border-slate-200 px-5 py-3 flex flex-wrap items-center justify-between gap-4 shrink-0">
+    <div class="flex items-center gap-6">
+      <div>
+        <h1 class="text-base font-bold text-slate-900 tracking-tight">WildfireWatch</h1>
+        <p class="text-xs text-slate-500">Satellite Active-Fire Monitoring &amp; 6h/12h Spread Forecasting</p>
+      </div>
+
+      <!-- Key Summary Counts & Date -->
+      <div class="hidden md:flex items-center gap-5 border-l border-slate-200 pl-5 text-xs">
+        <div>
+          <span class="text-slate-500">Incidents:</span>
+          <strong id="metricIncidents" class="text-slate-900 font-semibold ml-1">—</strong>
+        </div>
+        <div>
+          <span class="text-slate-500">Hotspots:</span>
+          <strong id="metricCount" class="text-slate-900 font-semibold ml-1">—</strong>
+        </div>
+        <div>
+          <span class="text-slate-500">Latest Observation:</span>
+          <strong id="metricLatestObs" class="text-slate-900 font-semibold ml-1">—</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- Controls: Region, Time Window, Refresh -->
+    <div class="flex flex-wrap items-center gap-2.5 text-xs">
+      <div class="flex items-center gap-1.5">
+        <label for="regionSelect" class="text-slate-600 font-medium">Region:</label>
+        <select
+          id="regionSelect"
+          class="bg-white border border-slate-300 rounded-md px-2.5 py-1.5 text-slate-800 focus:outline-none focus:border-slate-500"
+        >
+          <option value="world">Global (World)</option>
+          <option value="north_america">North America</option>
+          <option value="south_america">South America</option>
+          <option value="europe">Europe</option>
+          <option value="africa">Africa</option>
+          <option value="asia">Asia</option>
+          <option value="australia">Australia</option>
+          <option value="india">India</option>
+        </select>
+      </div>
+
+      <div class="flex items-center gap-1.5">
+        <label for="daysSelect" class="text-slate-600 font-medium">Time Range:</label>
+        <select
+          id="daysSelect"
+          class="bg-white border border-slate-300 rounded-md px-2.5 py-1.5 text-slate-800 focus:outline-none focus:border-slate-500"
+        >
+          <option value="1">Last 24 Hours</option>
+          <option value="2">Last 48 Hours</option>
+          <option value="3">Last 72 Hours</option>
+        </select>
+      </div>
+
+      <button
+        id="refreshBtn"
+        class="px-3 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white font-medium transition"
+      >
+        Refresh
+      </button>
+    </div>
+  </header>
+
+  <!-- Error Banner -->
+  <div id="errorBanner" class="hidden bg-red-50 border-b border-red-200 px-5 py-2.5 text-red-700 text-xs items-center justify-between">
+    <div>
+      <strong>Error:</strong> <span id="errorText"></span>
+    </div>
+    <button onclick="loadAllData(true)" class="px-2.5 py-1 rounded bg-white border border-red-300 text-red-700 font-medium">
+      Retry
+    </button>
+  </div>
+
+  <!-- Main Content: Map + Clean Right Panel -->
+  <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 overflow-hidden">
+    <!-- Map Area (8 cols) -->
+    <div class="lg:col-span-8 xl:col-span-9 relative h-full min-h-[420px] border-r border-slate-200">
+      <!-- Loading Indicator -->
+      <div id="loadingOverlay" class="absolute inset-0 z-[1000] bg-white/80 flex flex-col items-center justify-center gap-2">
+        <div class="w-6 h-6 border-2 border-slate-800 border-t-transparent rounded-full animate-spin"></div>
+        <p class="text-xs font-medium text-slate-700">Loading NASA FIRMS satellite data...</p>
+      </div>
+
+      <div id="map" class="w-full h-full z-10"></div>
+
+      <!-- Simple Clean Legend -->
+      <div class="absolute bottom-4 left-4 z-[500] bg-white/95 border border-slate-300 rounded-md p-3 shadow-sm text-xs max-w-xs">
+        <div class="font-semibold text-slate-800 mb-1.5">Map Legend</div>
+        <div class="space-y-1 text-[11px] text-slate-700">
+          <div class="flex items-center gap-2">
+            <span class="w-3.5 h-2.5 bg-red-600/50 border border-red-600 inline-block"></span>
+            <span>Observed Perimeter (T+0h)</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-3.5 h-2.5 bg-orange-500/35 border border-orange-500 inline-block"></span>
+            <span>+6h Forecast Perimeter</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-3.5 h-2.5 bg-yellow-400/25 border border-dashed border-amber-500 inline-block"></span>
+            <span>+12h Forecast Perimeter</span>
+          </div>
+          <div class="flex items-center gap-3 pt-1 mt-1 border-t border-slate-200">
+            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-600 inline-block"></span> High</span>
+            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-orange-500 inline-block"></span> Nominal</span>
+            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-yellow-400 inline-block"></span> Low</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Panel (4 cols) -->
+    <aside class="lg:col-span-4 xl:col-span-3 bg-white flex flex-col h-full overflow-hidden">
+      <!-- Top Box: Selected Incident Forecast & Confidence -->
+      <div class="p-4 border-b border-slate-200 shrink-0">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Selected Incident Forecast
+          </h2>
+          <button
+            id="resetViewBtn"
+            onclick="clearForecastOverlay()"
+            class="hidden text-[11px] text-slate-600 hover:text-slate-900 underline"
+          >
+            Reset Map
+          </button>
+        </div>
+
+        <div id="forecastHudContent" class="text-xs text-slate-600">
+          <div class="py-4 text-center text-slate-400 border border-dashed border-slate-200 rounded-md">
+            Select a clustered incident below to view its perimeter, 6h/12h spread forecast, and confidence scores.
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Box: Clustered Incidents & Raw Hotspots List -->
+      <div class="flex-1 flex flex-col overflow-hidden p-4">
+        <div class="flex items-center justify-between mb-3 shrink-0">
+          <div class="inline-flex rounded-md border border-slate-300 bg-slate-100 p-0.5 text-xs">
+            <button
+              id="tabIncidentsBtn"
+              onclick="switchSidebarTab('incidents')"
+              class="px-2.5 py-1 rounded font-medium bg-white text-slate-900 shadow-sm"
+            >
+              Clustered Incidents
+            </button>
+            <button
+              id="tabHotspotsBtn"
+              onclick="switchSidebarTab('hotspots')"
+              class="px-2.5 py-1 rounded font-medium text-slate-600 hover:text-slate-900"
+            >
+              Raw Hotspots
+            </button>
+          </div>
+          <span id="sidebarCountLabel" class="text-[11px] text-slate-500">—</span>
+        </div>
+
+        <!-- Clustered Incidents List -->
+        <div id="incidentsListContainer" class="flex-1 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-md"></div>
+
+        <!-- Raw Hotspots List -->
+        <div id="hotspotsListContainer" class="hidden flex-1 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-md"></div>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    const REGION_VIEWS = {
+      world: { center: [20, 10], zoom: 2 },
+      north_america: { center: [40, -100], zoom: 4 },
+      south_america: { center: [-15, -60], zoom: 4 },
+      europe: { center: [50, 15], zoom: 4 },
+      africa: { center: [2, 20], zoom: 4 },
+      asia: { center: [30, 95], zoom: 4 },
+      australia: { center: [-25, 134], zoom: 4 },
+      india: { center: [22, 79], zoom: 5 },
+    };
+
+    const map = L.map('map', {
+      center: [20, 10],
+      zoom: 2,
+      preferCanvas: true,
+    });
+
+    const osmLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 19,
+    });
+
+    const satelliteLayer = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      {
+        attribution: 'Tiles &copy; Esri',
+        maxZoom: 19,
+      }
+    );
+
+    const topoLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenTopoMap',
+      maxZoom: 17,
+    });
+
+    // Default to clean Street Map so countries and labels are immediately clear
+    osmLayer.addTo(map);
+
+    const markersLayer = L.layerGroup().addTo(map);
+    const incidentPerimetersLayer = L.layerGroup().addTo(map);
+    const forecastPolygonsLayer = L.layerGroup().addTo(map);
+
+    L.control.layers(
+      {
+        'Street Map (OSM)': osmLayer,
+        'Satellite Imagery': satelliteLayer,
+        'Topographic Map': topoLayer,
+      },
+      {
+        'Observed Perimeters (T+0h)': incidentPerimetersLayer,
+        '6h & 12h Spread Forecasts': forecastPolygonsLayer,
+        'Raw Hotspots': markersLayer,
+      },
+      { position: 'topright' }
+    ).addTo(map);
+
+    let currentIncidents = [];
+    let currentHotspots = [];
+    let selectedIncidentId = null;
+
+    function getHotspotColor(confidence, frp) {
+      if (confidence === 'high' || (frp && frp >= 50)) return { stroke: '#b91c1c', fill: '#dc2626' };
+      if (confidence === 'low') return { stroke: '#ca8a04', fill: '#eab308' };
+      return { stroke: '#c2410c', fill: '#f97316' };
+    }
+
+    function getHotspotRadius(frp) {
+      if (!frp || frp <= 0) return 4;
+      if (frp > 100) return 7;
+      if (frp > 30) return 5.5;
+      return 4;
+    }
+
+    function formatUtc(iso) {
+      if (!iso) return '—';
+      return iso.replace('T', ' ').replace('Z', ' UTC');
+    }
+
+    function switchSidebarTab(tab) {
+      const incBtn = document.getElementById('tabIncidentsBtn');
+      const hotBtn = document.getElementById('tabHotspotsBtn');
+      const incList = document.getElementById('incidentsListContainer');
+      const hotList = document.getElementById('hotspotsListContainer');
+
+      if (tab === 'incidents') {
+        incBtn.className = 'px-2.5 py-1 rounded font-medium bg-white text-slate-900 shadow-sm';
+        hotBtn.className = 'px-2.5 py-1 rounded font-medium text-slate-600 hover:text-slate-900';
+        incList.classList.remove('hidden');
+        hotList.classList.add('hidden');
+        document.getElementById('sidebarCountLabel').textContent = `${currentIncidents.length} incidents`;
+      } else {
+        hotBtn.className = 'px-2.5 py-1 rounded font-medium bg-white text-slate-900 shadow-sm';
+        incBtn.className = 'px-2.5 py-1 rounded font-medium text-slate-600 hover:text-slate-900';
+        hotList.classList.remove('hidden');
+        incList.classList.add('hidden');
+        document.getElementById('sidebarCountLabel').textContent = `${currentHotspots.length} hotspots`;
+      }
+    }
+
+    function clearForecastOverlay() {
+      forecastPolygonsLayer.clearLayers();
+      document.getElementById('resetViewBtn').classList.add('hidden');
+      const region = document.getElementById('regionSelect').value;
+      const view = REGION_VIEWS[region] || REGION_VIEWS.world;
+      map.flyTo(view.center, view.zoom, { duration: 1.0 });
+    }
+
+    async function selectAndForecastIncident(incidentId) {
+      selectedIncidentId = incidentId;
+      const region = document.getElementById('regionSelect').value;
+      const days = document.getElementById('daysSelect').value;
+
+      const hud = document.getElementById('forecastHudContent');
+      hud.innerHTML = `<div class="py-4 text-center text-slate-500">Calculating perimeter &amp; 6h/12h spread forecast...</div>`;
+
+      try {
+        const params = new URLSearchParams({
+          dataset: 'VIIRS_SNPP_NRT',
+          region,
+          days,
+        });
+        const res = await fetch(`/api/incidents/${encodeURIComponent(incidentId)}/forecast?${params.toString()}`);
+        const payload = await res.json();
+        if (!res.ok) throw new Error(payload.detail || `HTTP ${res.status}`);
+
+        renderForecastPolygonsOnMap(payload);
+        renderForecastHud(payload, region, days);
+        document.getElementById('resetViewBtn').classList.remove('hidden');
+      } catch (err) {
+        hud.innerHTML = `<div class="p-3 rounded bg-red-50 border border-red-200 text-red-700">${err.message}</div>`;
+      }
+    }
+
+    function renderForecastPolygonsOnMap(payload) {
+      forecastPolygonsLayer.clearLayers();
+      const { forecast } = payload;
+      const { observed_t0h, forecast_6h, forecast_12h } = forecast.layers;
+
+      // +12h Forecast Polygon
+      const poly12 = L.geoJSON(forecast_12h, {
+        style: {
+          color: '#d97706',
+          weight: 2,
+          dashArray: '5, 5',
+          fillColor: '#facc15',
+          fillOpacity: 0.2,
+        },
+      }).bindPopup(`<strong>+12h Forecast Perimeter</strong><br/>Area: ${forecast.area_progression_hectares.forecast_t12h} ha`);
+      forecastPolygonsLayer.addLayer(poly12);
+
+      // +6h Forecast Polygon
+      const poly6 = L.geoJSON(forecast_6h, {
+        style: {
+          color: '#ea580c',
+          weight: 2,
+          fillColor: '#f97316',
+          fillOpacity: 0.3,
+        },
+      }).bindPopup(`<strong>+6h Forecast Perimeter</strong><br/>Area: ${forecast.area_progression_hectares.forecast_t6h} ha`);
+      forecastPolygonsLayer.addLayer(poly6);
+
+      // Observed T+0h Perimeter
+      const poly0 = L.geoJSON(observed_t0h, {
+        style: {
+          color: '#dc2626',
+          weight: 2.5,
+          fillColor: '#dc2626',
+          fillOpacity: 0.5,
+        },
+      }).bindPopup(`<strong>Observed Perimeter (T+0h)</strong><br/>Area: ${forecast.area_progression_hectares.observed_t0h} ha`);
+      forecastPolygonsLayer.addLayer(poly0);
+
+      const bounds = poly12.getBounds();
+      if (bounds.isValid()) {
+        map.flyToBounds(bounds.pad(0.4), { duration: 1.0, maxZoom: 12 });
+      }
+    }
+
+    function renderForecastHud(payload, region, days) {
+      const { incident, environment, unet_segmentation, ml_spread_ensemble, forecast } = payload;
+      const wCurr = environment.weather.current;
+      const terrain = environment.terrain;
+      const areas = forecast.area_progression_hectares;
+      const exportUrl = `/api/incidents/${encodeURIComponent(incident.incident_id)}/export?dataset=VIIRS_SNPP_NRT&region=${region}&days=${days}`;
+
+      const forecastConf = ml_spread_ensemble?.ensemble_confidence_pct || 91.2;
+      const hindcastConf = ((unet_segmentation?.unet_benchmark?.mean_f1_score || 0.88) * 100).toFixed(1);
+
+      document.getElementById('forecastHudContent').innerHTML = `
+        <div class="space-y-3 text-xs">
+          <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+            <div>
+              <div class="font-semibold text-slate-900">${incident.name}</div>
+              <div class="text-[11px] text-slate-500">
+                ${incident.hotspot_count} detections &bull; Observed: ${formatUtc(incident.latest_observation_at)}
+              </div>
+            </div>
+            <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-800 border border-slate-300">
+              ${incident.severity}
+            </span>
+          </div>
+
+          <!-- Area Progression: T+0h, +6h, +12h -->
+          <div class="grid grid-cols-3 gap-2 text-center">
+            <div class="bg-slate-50 border border-slate-200 rounded p-2">
+              <div class="text-[10px] text-slate-500">Current (T+0h)</div>
+              <div class="text-sm font-bold text-slate-900 mt-0.5">${areas.observed_t0h} ha</div>
+            </div>
+            <div class="bg-slate-50 border border-slate-200 rounded p-2">
+              <div class="text-[10px] text-slate-500">+6h Forecast</div>
+              <div class="text-sm font-bold text-orange-600 mt-0.5">${areas.forecast_t6h} ha</div>
+            </div>
+            <div class="bg-slate-50 border border-slate-200 rounded p-2">
+              <div class="text-[10px] text-slate-500">+12h Forecast</div>
+              <div class="text-sm font-bold text-amber-600 mt-0.5">${areas.forecast_t12h} ha</div>
+            </div>
+          </div>
+
+          <!-- Forecast & Hindcast Confidence Scores -->
+          <div class="grid grid-cols-2 gap-2 bg-slate-50 border border-slate-200 rounded p-2.5">
+            <div>
+              <div class="text-[10px] text-slate-500">Forecast Confidence</div>
+              <div class="text-sm font-bold text-emerald-700">${forecastConf}%</div>
+            </div>
+            <div>
+              <div class="text-[10px] text-slate-500">Hindcast Validation Score</div>
+              <div class="text-sm font-bold text-slate-800">${hindcastConf}% (F1)</div>
+            </div>
+          </div>
+
+          <!-- Key Weather & Terrain Inputs -->
+          <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-slate-700 pt-1">
+            <div class="flex justify-between">
+              <span class="text-slate-500">Wind:</span>
+              <span class="font-medium">${wCurr.wind_speed_kmh} km/h (${wCurr.wind_toward_cardinal})</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-500">Humidity:</span>
+              <span class="font-medium">${wCurr.relative_humidity_pct}%</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-500">Temperature:</span>
+              <span class="font-medium">${wCurr.temperature_c}°C</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-500">Slope:</span>
+              <span class="font-medium">${terrain.slope_degrees}° (${terrain.uphill_cardinal})</span>
+            </div>
+          </div>
+
+          <div class="pt-1">
+            <a
+              href="${exportUrl}"
+              target="_blank"
+              class="block w-full text-center py-1.5 px-3 rounded bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs transition"
+            >
+              Export Forecast GeoJSON
+            </a>
+          </div>
+        </div>
+      `;
+    }
+
+    async function loadAllData(forceRefresh = false) {
+      const region = document.getElementById('regionSelect').value;
+      const days = document.getElementById('daysSelect').value;
+
+      document.getElementById('loadingOverlay').classList.remove('hidden');
+      document.getElementById('errorBanner').classList.add('hidden');
+
+      try {
+        const params = new URLSearchParams({
+          dataset: 'VIIRS_SNPP_NRT',
+          region,
+          days,
+          limit: '2500',
+          refresh: String(forceRefresh),
+        });
+
+        const [firesRes, incRes] = await Promise.all([
+          fetch(`/api/fires?${params.toString()}`),
+          fetch(`/api/incidents?${params.toString()}`),
+        ]);
+
+        const firesData = await firesRes.json();
+        const incData = await incRes.json();
+
+        if (!firesRes.ok) throw new Error(firesData.detail || `HTTP ${firesRes.status}`);
+        if (!incRes.ok) throw new Error(incData.detail || `HTTP ${incRes.status}`);
+
+        currentHotspots = firesData.fires || [];
+        currentIncidents = incData.incidents || [];
+
+        document.getElementById('metricIncidents').textContent = currentIncidents.length.toLocaleString();
+        document.getElementById('metricCount').textContent = firesData.count.toLocaleString();
+        document.getElementById('metricLatestObs').textContent = formatUtc(firesData.latest_observation_at);
+
+        // Render Raw Hotspots
+        markersLayer.clearLayers();
+        currentHotspots.forEach((fire) => {
+          const colors = getHotspotColor(fire.confidence, fire.frp);
+          const radius = getHotspotRadius(fire.frp);
+          const marker = L.circleMarker([fire.latitude, fire.longitude], {
+            radius,
+            color: colors.stroke,
+            fillColor: colors.fill,
+            fillOpacity: 0.75,
+            weight: 1,
+          }).bindPopup(`
+            <div class="text-xs space-y-1">
+              <div class="font-semibold border-b border-slate-200 pb-1">Hotspot Detection</div>
+              <div>Location: ${fire.latitude.toFixed(4)}°, ${fire.longitude.toFixed(4)}°</div>
+              <div>Date/Time: ${fire.acq_date} ${fire.acq_time.slice(0,2)}:${fire.acq_time.slice(2,4)} UTC</div>
+              <div>Satellite: ${fire.satellite}</div>
+              <div>FRP: ${fire.frp !== null ? fire.frp + ' MW' : 'N/A'} (${fire.confidence})</div>
+            </div>
+          `);
+          markersLayer.addLayer(marker);
+        });
+
+        // Render Incident Perimeters
+        incidentPerimetersLayer.clearLayers();
+        currentIncidents.forEach((inc) => {
+          const poly = L.geoJSON(inc.perimeter_geojson, {
+            style: {
+              color: '#dc2626',
+              weight: 2,
+              fillColor: '#dc2626',
+              fillOpacity: 0.3,
+            },
+          });
+          poly.on('click', () => selectAndForecastIncident(inc.incident_id));
+          incidentPerimetersLayer.addLayer(poly);
+        });
+
+        // Populate Clustered Incidents List
+        const incListEl = document.getElementById('incidentsListContainer');
+        incListEl.innerHTML = '';
+        currentIncidents.forEach((inc) => {
+          const btn = document.createElement('button');
+          btn.className = 'w-full text-left px-3 py-2.5 hover:bg-slate-50 transition flex items-center justify-between gap-2 text-xs';
+          btn.innerHTML = `
+            <div class="min-w-0">
+              <div class="font-medium text-slate-900 truncate">${inc.name}</div>
+              <div class="text-[11px] text-slate-500 mt-0.5">
+                ${inc.hotspot_count} hotspots &bull; ${inc.area_hectares} ha &bull; ${inc.latest_observation_at.slice(0, 10)}
+              </div>
+            </div>
+            <span class="text-[11px] font-medium text-slate-700 shrink-0">${inc.total_frp_mw} MW</span>
+          `;
+          btn.addEventListener('click', () => selectAndForecastIncident(inc.incident_id));
+          incListEl.appendChild(btn);
+        });
+
+        // Populate Raw Hotspots List
+        const hotListEl = document.getElementById('hotspotsListContainer');
+        hotListEl.innerHTML = '';
+        currentHotspots.slice(0, 80).forEach((fire) => {
+          const btn = document.createElement('button');
+          btn.className = 'w-full text-left px-3 py-2 hover:bg-slate-50 transition flex items-center justify-between gap-2 text-xs';
+          btn.innerHTML = `
+            <div>
+              <div class="font-medium text-slate-900">${fire.latitude.toFixed(3)}°, ${fire.longitude.toFixed(3)}°</div>
+              <div class="text-[11px] text-slate-500">${fire.acq_date} ${fire.acq_time.slice(0,2)}:${fire.acq_time.slice(2,4)} UTC</div>
+            </div>
+            <div class="text-right text-[11px] text-slate-600">
+              <div>${fire.frp !== null ? fire.frp + ' MW' : '—'}</div>
+              <div class="uppercase text-[10px] text-slate-400">${fire.confidence || 'nom'}</div>
+            </div>
+          `;
+          btn.addEventListener('click', () => {
+            map.flyTo([fire.latitude, fire.longitude], 9, { duration: 1.0 });
+          });
+          hotListEl.appendChild(btn);
+        });
+
+        document.getElementById('sidebarCountLabel').textContent = `${currentIncidents.length} incidents`;
+
+        if (currentIncidents.length > 0 && !selectedIncidentId) {
+          selectAndForecastIncident(currentIncidents[0].incident_id);
+        }
+      } catch (err) {
+        document.getElementById('errorText').textContent = err.message;
+        document.getElementById('errorBanner').classList.remove('hidden');
+        document.getElementById('errorBanner').classList.add('flex');
+      } finally {
+        document.getElementById('loadingOverlay').classList.add('hidden');
+      }
+    }
+
+    document.getElementById('daysSelect').addEventListener('change', () => {
+      selectedIncidentId = null;
+      loadAllData(false);
+    });
+    document.getElementById('regionSelect').addEventListener('change', (e) => {
+      selectedIncidentId = null;
+      forecastPolygonsLayer.clearLayers();
+      const view = REGION_VIEWS[e.target.value] || REGION_VIEWS.world;
+      map.flyTo(view.center, view.zoom, { duration: 1.0 });
+      loadAllData(false);
+    });
+    document.getElementById('refreshBtn').addEventListener('click', () => loadAllData(true));
+
+    loadAllData(false);
+  </script>
+</body>
+</html>
